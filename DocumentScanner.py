@@ -3,9 +3,7 @@ import numpy as np
 import pytesseract
 import argparse
 
-
 def order_points(pts):
-    """Order points in clockwise order (top-left, top-right, bottom-right, bottom-left)."""
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
     rect[0] = pts[np.argmin(s)]  
@@ -15,9 +13,7 @@ def order_points(pts):
     rect[3] = pts[np.argmax(diff)] 
     return rect
 
-
 def four_point_transform(image, pts):
-    """Apply perspective transform to obtain a top-down view of an image."""
     rect = order_points(pts.reshape(4, 2))
     (tl, tr, br, bl) = rect
     
@@ -34,24 +30,37 @@ def four_point_transform(image, pts):
     warped = cv.warpPerspective(image, M, (maxWidth, maxHeight))
     return warped
 
+def update_canny(val=None):
+    threshold1 = cv.getTrackbarPos('Threshold1', 'Canny Edges')
+    threshold2 = cv.getTrackbarPos('Threshold2', 'Canny Edges')
+    edged = cv.Canny(gray, threshold1, threshold2)
+    cv.imshow("Canny Edges", edged)
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Document Scanner with OCR")
+    parser = argparse.ArgumentParser(description="OCR")
     parser.add_argument("-i", "--image", required=True, help="Path to the image to be scanned")
     args = parser.parse_args()
 
     image = cv.imread(args.image)
-    if image is None:
-        raise ValueError("Could not read the image.")
-
+    
     ratio = 1000 / image.shape[0]
     orig = image.copy()
     resize_image = cv.resize(image, (0, 0), fx=ratio, fy=ratio, interpolation=cv.INTER_CUBIC)
 
+    global gray
     gray = cv.cvtColor(resize_image, cv.COLOR_RGB2GRAY)
     gray = cv.GaussianBlur(gray, (5, 5), 0)
-    edged = cv.Canny(gray, 75, 200)
 
+    cv.namedWindow("Canny Edges")
+    cv.createTrackbar("Threshold1", "Canny Edges", 50, 255, update_canny)
+    cv.createTrackbar("Threshold2", "Canny Edges", 150, 255, update_canny)
+
+    # Initial call to show Canny edges
+    update_canny()
+    
+    cv.waitKey(0)
+
+    edged = cv.Canny(gray, cv.getTrackbarPos('Threshold1', 'Canny Edges'), cv.getTrackbarPos('Threshold2', 'Canny Edges'))
     contours, _ = cv.findContours(edged.copy(), cv.RETR_TREE, cv.CHAIN_APPROX_NONE)
     contours = sorted(contours, key=cv.contourArea, reverse=True)[:5]
 
@@ -63,26 +72,31 @@ def main() -> None:
             screen_cnt = approx
             break
 
-    if screen_cnt is None:
-        print("No document detected!")
-        return
+    if screen_cnt is not None:
+        contour_image = resize_image.copy()
+        cv.drawContours(contour_image, [screen_cnt], -1, (0, 255, 0), 2)
+        cv.imshow("Contours", contour_image)
+        key = cv.waitKey(0)
+
+        if key == 27:
+            cv.destroyAllWindows()
+            return
 
     warped = four_point_transform(orig, screen_cnt * (1 / ratio))
 
     warped_gray = cv.cvtColor(warped, cv.COLOR_BGR2GRAY)
     _, binary_document = cv.threshold(warped_gray, 127, 255, cv.THRESH_BINARY)
 
-    print("Performing OCR...")
+    print("OCR...")
     text = pytesseract.image_to_string(binary_document, lang="eng")
-    print("Detected Text:")
+
     print(text)
 
-    cv.imshow("Original Image", resize_image)
-    cv.imshow("Scanned Document", binary_document)
-    cv.imwrite("scanned_document.jpg", binary_document)
+    cv.imshow("Original", resize_image)
+    cv.imshow("Scan", binary_document)
+    cv.imwrite("document.png", binary_document)
     cv.waitKey(0)
     cv.destroyAllWindows()
-
 
 if __name__ == "__main__":
     main()
